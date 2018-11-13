@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"regexp"
 	"sync"
 
 	"github.com/weibocom/motan-go/cluster"
@@ -17,10 +18,11 @@ var (
 )
 
 type MCContext struct {
-	confFile   string
-	context    *motan.Context
-	extFactory motan.ExtensionFactory
-	clients    map[string]*Client
+	confFile    string
+	context     *motan.Context
+	extFactory  motan.ExtensionFactory
+	clients     map[string]*Client
+	httpClients map[string]map[string]*Client
 
 	csync  sync.Mutex
 	inited bool
@@ -124,6 +126,7 @@ func (m *MCContext) Initialize() {
 		m.context.Initialize()
 
 		m.clients = make(map[string]*Client, 32)
+		m.httpClients = make(map[string]map[string]*Client)
 		m.inited = true
 	}
 }
@@ -140,10 +143,34 @@ func (m *MCContext) Start(extfactory motan.ExtensionFactory) {
 		c := cluster.NewCluster(m.context, m.extFactory, url, false)
 		m.clients[key] = &Client{url: url, cluster: c, extFactory: m.extFactory}
 	}
+	for domain, value := range m.context.HttpRefersURLs {
+		_, ok := m.httpClients[domain]
+		if !ok {
+			m.httpClients[domain] = make(map[string]*Client)
+		}
+		for location, url := range value {
+			c := cluster.NewCluster(m.context, m.extFactory, url, false)
+			m.httpClients[domain][location] = &Client{url: url, cluster: c, extFactory: m.extFactory}
+		}
+	}
 }
 
 func (m *MCContext) GetClient(clientid string) *Client {
-	return m.clients[clientid]
+	if client, ok := m.clients[clientid]; ok {
+		return client
+	}
+	return nil
+}
+
+func (m *MCContext) GetHttpClient(domain string, path string) *Client {
+	if value, ok := m.httpClients[domain]; ok {
+		for location, client := range value {
+			if match, _ := regexp.MatchString(location, path); match {
+				return client
+			}
+		}
+	}
+	return nil
 }
 
 func (m *MCContext) GetRefer(service string) interface{} {

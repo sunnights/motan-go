@@ -18,6 +18,7 @@ const (
 	basicServicesSection = "motan-basicService"
 	servicesSection      = "motan-service"
 	agentSection         = "motan-agent"
+	httpAgentSection     = "motan-http-agent"
 	clientSection        = "motan-client"
 	serverSection        = "motan-server"
 	importSection        = "import-refer"
@@ -50,6 +51,7 @@ type Context struct {
 	RegistryURLs     map[string]*URL
 	RefersURLs       map[string]*URL
 	BasicReferURLs   map[string]*URL
+	HttpRefersURLs   map[string]map[string]*URL
 	ServiceURLs      map[string]*URL
 	BasicServiceURLs map[string]*URL
 	AgentURL         *URL
@@ -66,6 +68,7 @@ var (
 	Port         = flag.Int("port", 0, "agent listen port")
 	Eport        = flag.Int("eport", 0, "agent export service port when as a reverse proxy server")
 	Mport        = flag.Int("mport", 0, "agent manage port")
+	HttpPort     = flag.Int("httpPort", 0, "http agent port")
 	Pidfile      = flag.String("pidfile", "", "agent manage port")
 	CfgFile      = flag.String("c", "", "motan run conf")
 	LocalIP      = flag.String("localIP", "", "local ip for motan register")
@@ -90,29 +93,29 @@ func (c *Context) confToURLs(section string) map[string]*URL {
 func confToURL(urlInfo map[interface{}]interface{}) *URL {
 	urlParams := make(map[string]string)
 	url := &URL{Parameters: urlParams}
-	for sk, sinfo := range urlInfo {
-		if _, ok := urlFields[sk.(string)]; ok {
-			if reflect.TypeOf(sinfo) == nil {
-				if sk == "port" {
-					sinfo = "0"
+	for key, value := range urlInfo {
+		if _, ok := urlFields[key.(string)]; ok {
+			if reflect.TypeOf(value) == nil {
+				if key == "port" {
+					value = "0"
 				} else {
-					sinfo = ""
+					value = ""
 				}
 			}
-			switch sk.(string) {
+			switch key.(string) {
 			case "protocol":
-				url.Protocol = sinfo.(string)
+				url.Protocol = value.(string)
 			case "host":
-				url.Host = sinfo.(string)
+				url.Host = value.(string)
 			case "port":
-				url.Port = sinfo.(int)
+				url.Port = value.(int)
 			case "path":
-				url.Path = sinfo.(string)
+				url.Path = value.(string)
 			case "group":
-				url.Group = sinfo.(string)
+				url.Group = value.(string)
 			}
 		} else {
-			urlParams[sk.(string)] = InterfaceToString(sinfo)
+			urlParams[key.(string)] = InterfaceToString(value)
 		}
 	}
 	url.Parameters = urlParams
@@ -123,6 +126,7 @@ func (c *Context) Initialize() {
 	c.RegistryURLs = make(map[string]*URL)
 	c.RefersURLs = make(map[string]*URL)
 	c.BasicReferURLs = make(map[string]*URL)
+	c.HttpRefersURLs = make(map[string]map[string]*URL)
 	c.ServiceURLs = make(map[string]*URL)
 	c.BasicServiceURLs = make(map[string]*URL)
 	if c.ConfigFile == "" { // use flag as default config file name
@@ -318,8 +322,56 @@ func (c *Context) basicConfToURLs(section string) map[string]*URL {
 	return newURLs
 }
 
+func (c *Context) agentConfToURLs(section string, subSection string) map[string]*URL {
+	urls := map[string]*URL{}
+	sectionConf, _ := c.Config.GetSection(section)
+	idc := sectionConf["idc"]
+	domains := sectionConf["domains"]
+	// todo
+	upstream := sectionConf["upstream"]
+	if idc != nil && domains != nil && upstream != nil {
+		for _, domain := range strings.Split(domains.(string), ",") {
+			urlInfo := sectionConf[subSection].(map[interface{}]interface{})
+			urlInfo["path"] = upstream
+			urlInfo["group"] = idc.(string) + "-" + domain
+			url := confToURL(urlInfo)
+			urls[domain] = url
+		}
+	}
+	return urls
+}
+
+func (c *Context) agentConfToHttpURLs(section string, subSection string) map[string]map[string]*URL {
+	urls := map[string]map[string]*URL{}
+	sectionConf, _ := c.Config.GetSection(section)
+	idc := sectionConf["idc"]
+	domains := sectionConf["domains"]
+	upstream := sectionConf["upstream"]
+	location := sectionConf["location"].(string)
+	if idc != nil && domains != nil && upstream != nil {
+		for _, domain := range strings.Split(domains.(string), ",") {
+			urlInfo := sectionConf[subSection].(map[interface{}]interface{})
+			urlInfo["path"] = upstream
+			urlInfo["group"] = idc.(string) + "-" + domain
+			url := confToURL(urlInfo)
+			value, ok := urls[domain]
+			if ok {
+				value[location] = url
+			} else {
+				urls[domain] = make(map[string]*URL)
+			}
+			urls[domain][location] = url
+		}
+	}
+	return urls
+}
+
 func (c *Context) parseRefers() {
 	c.RefersURLs = c.basicConfToURLs(refersSection)
+
+	for k, v := range c.agentConfToHttpURLs(httpAgentSection, "agent-referer") {
+		c.HttpRefersURLs[k] = v
+	}
 }
 
 func (c *Context) parseBasicRefers() {
@@ -328,6 +380,10 @@ func (c *Context) parseBasicRefers() {
 
 func (c *Context) parseServices() {
 	c.ServiceURLs = c.basicConfToURLs(servicesSection)
+
+	for k, v := range c.agentConfToURLs(httpAgentSection, "agent-service") {
+		c.ServiceURLs[k] = v
+	}
 }
 
 func (c *Context) parserBasicServices() {

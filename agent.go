@@ -1,10 +1,13 @@
 package motan
 
 import (
+	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +25,7 @@ import (
 const (
 	defaultPort       = 9981
 	defaultEport      = 9982
+	defaultHttpPort   = 9980
 	defaultMport      = 8002
 	defaultPidFile    = "./agent.pid"
 	defaultAgentGroup = "default_agent_group"
@@ -42,8 +46,9 @@ type Agent struct {
 	agentURL   *motan.URL
 	logdir     string
 	port       int
-	mport      int
 	eport      int
+	httpPort   int
+	mport      int
 	pidfile    string
 	runtimedir string
 
@@ -108,6 +113,7 @@ func (a *Agent) StartMotanAgent() {
 	a.configurer = NewDynamicConfigurer(a)
 	go a.startMServer()
 	go a.registerAgent()
+	go a.startHttpAgent()
 	f, err := os.Create(a.pidfile)
 	if err != nil {
 		vlog.Errorf("create file %s fail.\n", a.pidfile)
@@ -185,6 +191,14 @@ func (a *Agent) initParam() {
 		mport = defaultMport
 	}
 
+	httpPort := *motan.HttpPort
+	if httpPort == 0 && section != nil && section["httpPort"] != nil {
+		httpPort = section["httpPort"].(int)
+	}
+	if httpPort == 0 {
+		httpPort = defaultHttpPort
+	}
+
 	eport := *motan.Eport
 	if eport == 0 && section != nil && section["eport"] != nil {
 		eport = section["eport"].(int)
@@ -218,6 +232,7 @@ func (a *Agent) initParam() {
 	a.logdir = logdir
 	a.port = port
 	a.eport = eport
+	a.httpPort = httpPort
 	a.mport = mport
 	a.pidfile = pidfile
 	a.runtimedir = runtimedir
@@ -226,6 +241,11 @@ func (a *Agent) initParam() {
 func (a *Agent) initClusters() {
 	for _, url := range a.Context.RefersURLs {
 		a.initCluster(url)
+	}
+	for _, v := range a.Context.HttpRefersURLs {
+		for _, url := range v {
+			a.initCluster(url)
+		}
 	}
 }
 
@@ -535,14 +555,59 @@ func (a *Agent) startMServer() {
 	}
 }
 
+func (a *Agent) startHttpAgent() {
+	serverMux := http.NewServeMux()
+	// TODO
+	motanContext := GetClientContext("")
+	motanContext.Start(nil)
+	serverMux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+		// http to rpc
+		rawRequestBytes, err := httputil.DumpRequest(request, true)
+		if err != nil {
+			http.Error(writer, fmt.Sprint(err), http.StatusInternalServerError)
+			fmt.Println(err)
+			return
+		}
+
+		var reply []byte
+		client := motanContext.GetHttpClient(request.Host, request.RequestURI)
+		if client == nil {
+			http.Error(writer, fmt.Sprint(err), http.StatusInternalServerError)
+			fmt.Println(err)
+			return
+		}
+
+		err = client.Call(request.RequestURI, []interface{}{"raw_http_request", rawRequestBytes}, &reply)
+		if err != nil {
+			http.Error(writer, fmt.Sprint(err), http.StatusInternalServerError)
+			fmt.Println(err)
+			return
+		}
+
+		response, _ := http.ReadResponse(bufio.NewReader(bytes.NewReader(reply)), request)
+		defer response.Body.Close()
+		for header := range response.Header {
+			writer.Header().Set(header, response.Header.Get(header))
+		}
+		body, _ := ioutil.ReadAll(response.Body)
+		writer.Write(body)
+	})
+	vlog.Infof("start listen http agent port %d ...\n", a.httpPort)
+	err := http.ListenAndServe(":"+strconv.Itoa(a.httpPort), serverMux)
+	if err != nil {
+		fmt.Printf("start listen http agent port fail! port:%d, err:%s\n", a.httpPort, err.Error())
+		vlog.Warningf("start listen http agent port fail! port:%d, err:%s\n", a.httpPort, err.Error())
+	}
+}
+
 func (a *Agent) mhandle(k string, h http.Handler) {
 	defer func() {
 		if err := recover(); err != nil {
 			vlog.Warningf("manageHandler register fail. maybe the pattern '%s' already registered\n", k)
 		}
 	}()
-	if sa, ok := h.(SetAgent); ok {
-		sa.SetAgent(a)
+	if handler, ok := h.(SetAgent); ok {
+		handler.SetAgent(a)
 	}
 	http.HandleFunc(k, func(w http.ResponseWriter, r *http.Request) {
 		if !PermissionCheck(r) {

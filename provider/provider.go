@@ -1,19 +1,19 @@
 package provider
 
 import (
-	"reflect"
-
 	motan "github.com/weibocom/motan-go/core"
 	"github.com/weibocom/motan-go/log"
+	"reflect"
 )
 
 // ext name
 const (
-	CGI     = "cgi"
-	HTTP    = "http"
-	MOTAN2  = "motan2"
-	Mock    = "mockProvider"
-	Default = "default"
+	CGI         = "cgi"
+	HTTP        = "http"
+	RPCWithHTTP = "rpcWithHttp"
+	MOTAN2      = "motan2"
+	Mock        = "mockProvider"
+	Default     = "default"
 )
 
 func RegistDefaultProvider(extFactory motan.ExtensionFactory) {
@@ -24,6 +24,10 @@ func RegistDefaultProvider(extFactory motan.ExtensionFactory) {
 
 	extFactory.RegistExtProvider(HTTP, func(url *motan.URL) motan.Provider {
 		return &HTTPProvider{url: url}
+	})
+
+	extFactory.RegistExtProvider(RPCWithHTTP, func(url *motan.URL) motan.Provider {
+		return &RPCWithHTTPProvider{url: url}
 	})
 
 	extFactory.RegistExtProvider(MOTAN2, func(url *motan.URL) motan.Provider {

@@ -4,13 +4,15 @@ motan-agent:
   port: 9981 # agent serve port.
   eport: 9982 # service export port when as a reverse proxy
   mport: 8002 # agent manage port
+  httpPort: 9980
+  httpServerPort: 8080
   log_dir: "./agentlogs"
-  registry: "direct-registry" # registry id for registering agent info
-  application: "agent-test" # agent identify. for agent command notify and so on
+  registry: "zk-registry" # registry id for registering agent info
+  application: "agent-demo" # agent identify. for agent command notify and so on
 
 #config of registries
 motan-registry:
-  direct-registry: # registry id 
+  direct-registry: # registry id
     protocol: direct   # registry type. will get instance from extFactory.
     host: localhost # direct server ip in single ip. if has host, address will disable.
     port: 9982 #direct server port
@@ -23,10 +25,34 @@ motan-registry:
     registrySessionTimeout: 10000
     requestTimeout: 5000
 
-
 #conf of extensions. any custom config
 testextconf:
   foo: xxx
   bar:
     sub1: zzz
     sub2: zzz
+
+motan-http-agent:
+  agent-service:
+    application: "http-agent-service"
+    protocol: motan2
+    registry: zk-registry
+    filter: "accessLog"
+    serialization: simple
+    nodeType: server
+    export: "motan2:9982"
+    provider: rpcWithHttp
+  agent-referer:
+    application: "http-agent-referer"
+    protocol: motan2
+    registry: zk-registry
+    requestTimeout: 10000000
+    haStrategy: failover
+    loadbalance: roundrobin
+    serialization: simple
+    filter: "accessLog"
+    retries: 0
+    depend-upstreams: openapi_proxyv2-yf-inner,openapi_proxy_auth-yf
+  idc: yf
+  domains: i.api.weibo.com,i2.api.weibo.com
+  upstream: openapi_proxyv2-yf-inner
